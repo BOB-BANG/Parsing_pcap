@@ -1,8 +1,13 @@
 #include <pcap.h>
 #include <stdio.h>
 #include <stdint.h>
+#include <arpa/inet.h>
+#include <string.h>
 #define ETHER_LEN 14
-//ethernet_header DMAC 6byte, SMAC 6byte, Type 2byte
+#define IP_LEN (((ip)->ip_ver_and_ip_ihl)&0x0F)*4
+#define TCP_LEN ((((tcp)->th_offx2 & 0xf0) >> 4))*4
+
+//ETHERNET HEADER DMAC 6byte, SMAC 6byte, Type 2byte
 typedef struct sniff_mac
 {
     u_char dmac[6];
@@ -10,7 +15,7 @@ typedef struct sniff_mac
     uint16_t type;
 }mac_struct;
 
-//IP header
+//IP HEADER
 typedef struct sniff_ip
 {
     uint8_t ip_ver_and_ip_ihl;		// version 4bits, header length 4bit
@@ -25,22 +30,21 @@ typedef struct sniff_ip
     u_char ip_ttl;		//time to live
     u_char ip_p;		//protocol
     u_short ip_sum;		//checksum
-    uint32_t s_ip;		//source address
-    uint32_t d_ip;		//dest address
+    u_char sip[4];		//source address
+    u_char dip[4];		//dest address
 } ip_struct;
 
-#define IP_HL(ip)		(((ip)->ip_vhl) & 0x0f)
-#define IP_V(ip)		(((ip)->ip_vhl) >> 4)
+//#define IP_HL(ip)		(((ip)->ip_vhl) & 0x0f)
+//#define IP_V(ip)		(((ip)->ip_vhl) >> 4)
 
-/* TCP header */
 typedef u_int tcp_seq;
-
-struct sniff_tcp {
-    u_short th_sport;	/* source port */
-    u_short th_dport;	/* destination port */
-    tcp_seq th_seq;		/* sequence number */
-    tcp_seq th_ack;		/* acknowledgement number */
-    u_char th_offx2;	/* data offset, rsvd */
+//TCP HEADER
+typedef struct sniff_tcp {
+    u_short sport;	    //source port
+    u_short dport;	    //destination port
+    tcp_seq th_seq;		//sequence number
+    tcp_seq th_ack;		//acknowledgement number
+    u_char th_offx2;	//data offset, rsvd
 #define TH_OFF(th)	(((th)->th_offx2 & 0xf0) >> 4)
     u_char th_flags;
 #define TH_FIN 0x01
@@ -52,42 +56,38 @@ struct sniff_tcp {
 #define TH_ECE 0x40
 #define TH_CWR 0x80
 #define TH_FLAGS (TH_FIN|TH_SYN|TH_RST|TH_ACK|TH_URG|TH_ECE|TH_CWR)
-    u_short th_win;		/* window */
+    u_short th_win;		// window */
     u_short th_sum;		/* checksum */
     u_short th_urp;		/* urgent pointer */
-};
+} tcp_struct;
 
-void print_mac(u_char *mac)
-{
+void print_mac(u_char *mac){
    for(int i=0; i<6; i++){
-       printf("%02X:",mac[i]);
-       if(i!=5){
+       printf("%02X",mac[i]);
+       if(i==5){
            printf("\n");
+       }
+       else {
+           printf(":");
        }
    }
 }
-//    printf("%02X:%02X:%02X:%02X:%02X\n",mac->dmac[0]);
-//}
-//void printMac(u_int8_t *addr)
-//{
 
-  //int sizeOfMac=6;//mac address => 48bit
-          //mac use hexadecimal number
-          //Ex) AB:CD:EF:GH:YJ:KL
-          //hexadecimal number use 4bit per 1 num
-          //0 0 0 0 => 0
-          //1 1 1 1 => F => 15
+void print_ip(u_char *ip){
+    for(int i=0; i<4; i++){
+        printf("%02d",ip[i]);
+        if(i==3){
+            printf("\n");
+        }
+        else {
+            printf(".");
+        }
+    }
+}
 
-  /*for(int i=0; i<sizeOfMac;i++)
-  {
-      printf("%02X",mac[i]);
-      if(i!=sizeOfMac-1)
-          printf(":");
-  }
-
-}*/
-void print_ip(uint8_t *ip){
-    printf("%u.%u.%u.%u\n",ip[0],ip[1],ip[2],ip[3]);
+void print_port(u_short port){
+    printf("%02d",ntohs(port));
+    printf("\n");
 }
 
 void usage() {
@@ -114,22 +114,57 @@ int main(int argc, char* argv[]) {
   while (true) {
     struct pcap_pkthdr* header;
     const u_char* packet;
-    mac_struct *mac;
+    mac_struct* mac;
     ip_struct* ip;
-
-
-
+    tcp_struct* tcp;
+    const u_char* payload;
     int res = pcap_next_ex(handle, &header, &packet);
     if (res == 0) continue;
     if (res == -1 || res == -2) break;
-    mac = (mac_struct*)(packet);
-    //printf("Packet Size : %u bytes\n", header->caplen);
-    //printf("Destination MAC Address : ");
-    print_mac(mac->dmac);
+    //printf("\n\nPacket Size             : %u bytes\n", header->caplen);
 
-    //printf("Source MAC Address      : ");
-    //printf("%02X:%02X:%02X:%02X:%02X:%02X\n", packet[7], packet[8], packet[9], packet[10], packet[11], packet[12]);
-  }
+
+    //PRINT MAC
+    printf("\n\n===========MAC print============\n");
+    mac = (mac_struct*)(packet);
+    printf("Destination MAC Address : ");
+    print_mac(mac->dmac);
+    printf("Source MAC Address      : ");
+    print_mac(mac->smac);
+    printf("%d",mac->type);
+
+    if(mac->type == ntohs(0x0800)){
+      //PRINT IP
+      printf("===========IP print=============\n");
+      ip = (ip_struct*)(packet+ETHER_LEN);
+      printf("Destination IP Address  : ");
+      print_ip(ip->dip);
+      printf("Source IP Address       : ");
+      print_ip(ip->sip);
+      //printf("ip header Size          : %d bytes\n",IP_LEN);
+
+      if(ip->ip_p == 6){
+        //PRINT TCP
+        printf("===========PORT print============\n");
+        tcp = (tcp_struct*)(packet+ETHER_LEN+IP_LEN);
+        printf("Destination PORT Number  : ");
+        print_port(tcp->dport);
+        printf("Source PORT Number       : ");
+        print_port(tcp->sport);
+        //printf("tcp header Size          : %d bytes\n",TCP_LEN);
+
+          //PRINT PAYLOAD
+          printf("===========DATA print============\n");
+          int PL_LEN = header->caplen - ETHER_LEN - IP_LEN - TCP_LEN;
+          payload = (u_char *) (packet + ETHER_LEN + IP_LEN + TCP_LEN);
+          printf("payload Data          : ");
+          if(PL_LEN > 10){PL_LEN =10;}
+          for (int i=0;(PL_LEN) >=i;i++) {
+              printf("%02X ",payload[i]);
+          }
+        }
+      }
+    }
 
   pcap_close(handle);
   return 0;
